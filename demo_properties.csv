@@ -1,0 +1,7 @@
+property_id,address,neighborhood,certificate_use,zoning,is_historic,permit_notes,last_major_permit_year
+P-001,504 S King St,Chinatown-International District,Restaurant,Commercial,TRUE,"Older building; prior tenant had kitchen hood installed",2018
+P-002,1520 2nd Ave,Downtown,Retail,Commercial,FALSE,"Recent interior remodel",2022
+P-003,900 Jackson St,Chinatown-International District,Office,Mixed,TRUE,"Historic district; storefront changes may require review",2016
+P-004,2800 NW Market St,Ballard,Retail,Commercial,FALSE,"No major permit history shown in demo",2010
+P-005,1101 E Yesler Way,Yesler Terrace,Restaurant,Mixed,FALSE,"Change of use may trigger upgrades; verify occupancy",2014
+P-006,600 1st Ave S,Pioneer Square,Warehouse,Industrial,TRUE,"Historic area; verify allowed uses for tenant improvements",2009
