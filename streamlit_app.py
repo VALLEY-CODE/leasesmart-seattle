@@ -4,6 +4,15 @@ from rapidfuzz import process, fuzz
 from datetime import datetime
 import io
 
+# Try RapidFuzz; fallback to difflib if not available (Streamlit Cloud safety)
+try:
+    from rapidfuzz import process, fuzz
+    HAS_RAPIDFUZZ = True
+except Exception:
+    HAS_RAPIDFUZZ = False
+    import difflib
+
+
 # -----------------------------
 # App config + styling
 # -----------------------------
@@ -408,4 +417,5 @@ st.caption("Demo dataset is embedded for reliability in demos. You can swap in r
 #
 # URL: <add the URL here>
 #
+
 # Feel free to add more detail and specifications. The more context you provide the prompt the better the return and more precise changes to the code
