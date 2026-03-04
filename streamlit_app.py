@@ -1,17 +1,17 @@
 import streamlit as st
 import pandas as pd
-from rapidfuzz import process, fuzz
 from datetime import datetime
 import io
 
-# Try RapidFuzz; fallback to difflib if not available (Streamlit Cloud safety)
+# -----------------------------
+# Optional dependency: RapidFuzz (with safe fallback)
+# -----------------------------
 try:
-    from rapidfuzz import process, fuzz
+    from rapidfuzz import process as rf_process, fuzz as rf_fuzz
     HAS_RAPIDFUZZ = True
 except Exception:
     HAS_RAPIDFUZZ = False
     import difflib
-
 
 # -----------------------------
 # App config + styling
@@ -39,19 +39,19 @@ st.markdown(
 # -----------------------------
 RESOURCE_LINKS = {
     "Opening a Business in Seattle – Step-by-Step Guide":
-    "https://www.seattle.gov/economic-development/start-a-business/how-to-start-a-business",
+        "https://www.seattle.gov/economic-development/start-a-business/how-to-start-a-business",
 
     "Seattle SDCI – Permit Coaching for Small Businesses":
-    "https://www.seattle.gov/economic-development/grow-a-business/consulting-services/commercial-space-permit-coaching",
+        "https://www.seattle.gov/economic-development/grow-a-business/consulting-services/commercial-space-permit-coaching",
 
     "Seattle Permit & Property Records (Lookup Tool)":
-    "https://services.seattle.gov/Portal/Customization/SEATTLE/welcome.aspx",
+        "https://services.seattle.gov/Portal/Customization/SEATTLE/welcome.aspx",
 
     "Seattle Office of Economic Development":
-    "https://www.seattle.gov/economicdevelopment",
+        "https://www.seattle.gov/economicdevelopment",
 
     "Seattle Open Data Portal":
-    "https://data.seattle.gov"
+        "https://data.seattle.gov"
 }
 
 BUSINESS_TYPES = [
@@ -65,8 +65,6 @@ BUSINESS_TYPES = [
     "Other"
 ]
 
-# A simple mapping from "business type" -> typical occupancy/use label in data
-# (This is just for demo. You can refine later.)
 USE_MAPPING = {
     "Restaurant / Café": ["Restaurant", "Cafe", "Food", "Bar"],
     "Retail": ["Retail", "Store", "Shop"],
@@ -95,20 +93,38 @@ def best_address_match(address_input: str, df: pd.DataFrame, limit: int = 5):
     if not address_input_n:
         return None, 0, pd.DataFrame()
 
-    # Compare normalized input against raw addresses (good enough for demo)
     choices = df["address"].astype(str).tolist()
-    matches = process.extract(
-        address_input_n,
-        choices,
-        scorer=fuzz.WRatio,
-        limit=limit
-    )
 
     rows = []
-    for addr, score, idx in matches:
-        r = df.iloc[idx].to_dict()
-        r["match_score"] = score
-        rows.append(r)
+
+    if HAS_RAPIDFUZZ:
+        # RapidFuzz path
+        matches = rf_process.extract(
+            address_input_n,
+            choices,
+            scorer=rf_fuzz.WRatio,
+            limit=limit
+        )
+        for addr, score, idx in matches:
+            r = df.iloc[idx].to_dict()
+            r["match_score"] = int(score)
+            rows.append(r)
+    else:
+        # difflib fallback path (no extra installs needed)
+        close = difflib.get_close_matches(address_input_n, [normalize(c) for c in choices], n=limit, cutoff=0.0)
+
+        # Map normalized -> original index(es)
+        norm_to_idx = {}
+        for i, c in enumerate(choices):
+            norm_to_idx.setdefault(normalize(c), []).append(i)
+
+        for naddr in close:
+            idx = norm_to_idx[naddr][0]
+            r = df.iloc[idx].to_dict()
+            # difflib score approximation (0-100)
+            ratio = difflib.SequenceMatcher(None, address_input_n, naddr).ratio()
+            r["match_score"] = int(round(ratio * 100))
+            rows.append(r)
 
     candidates = pd.DataFrame(rows).sort_values("match_score", ascending=False)
     if candidates.empty:
@@ -117,7 +133,6 @@ def best_address_match(address_input: str, df: pd.DataFrame, limit: int = 5):
     best = candidates.iloc[0]
     best_row = df[df["property_id"] == best["property_id"]].iloc[0]
     return best_row, int(best["match_score"]), candidates
-
 
 def use_matches_business_type(certificate_use: str, business_type: str) -> bool:
     cert = normalize(certificate_use)
@@ -131,18 +146,12 @@ def use_matches_business_type(certificate_use: str, business_type: str) -> bool:
             return True
     return False
 
-
 def compute_risk(row: pd.Series, business_type: str, wants_alcohol: bool, wants_kitchen_hood: bool):
-    """
-    Explainable, rule-based risk scoring.
-    Returns a dict with: risk_label, risk_emoji, score, reasons[], flags[], approvals[]
-    """
     score = 0
     reasons = []
     flags = []
     approvals = []
 
-    # Certificate of occupancy / existing use
     cert_use = str(row.get("certificate_use", ""))
     cert_ok = use_matches_business_type(cert_use, business_type)
 
@@ -154,7 +163,6 @@ def compute_risk(row: pd.Series, business_type: str, wants_alcohol: bool, wants_
         approvals.append("Confirm Certificate of Occupancy and whether a change-of-use permit is needed")
         reasons.append("The location’s existing Certificate of Occupancy may NOT match your business type, which can trigger a change-of-use process and upgrades.")
 
-    # Historic district
     is_hist = bool(row.get("is_historic", False))
     if is_hist:
         score += 2
@@ -164,7 +172,6 @@ def compute_risk(row: pd.Series, business_type: str, wants_alcohol: bool, wants_
     else:
         reasons.append("This address is not flagged as historic in the demo dataset (fewer preservation constraints).")
 
-    # Zoning (coarse demo logic)
     zoning = str(row.get("zoning", ""))
     zoning_n = normalize(zoning)
     if "commercial" in zoning_n or "mixed" in zoning_n:
@@ -175,7 +182,6 @@ def compute_risk(row: pd.Series, business_type: str, wants_alcohol: bool, wants_
         approvals.append("Verify zoning and whether your specific use is permitted at this address")
         reasons.append("Zoning may not be aligned with typical commercial uses, increasing the risk of restrictions or needing special approvals.")
 
-    # Food / alcohol signals (demo)
     if business_type == "Restaurant / Café":
         if wants_kitchen_hood:
             score += 1
@@ -191,7 +197,6 @@ def compute_risk(row: pd.Series, business_type: str, wants_alcohol: bool, wants_
         approvals.append("Plan for alcohol licensing; confirm occupancy/egress impacts if needed")
         reasons.append("Serving alcohol adds licensing steps and may affect occupancy/egress requirements depending on the layout and use.")
 
-    # Permit history (soft flag)
     permit_year = row.get("last_major_permit_year", None)
     try:
         permit_year = int(permit_year)
@@ -207,16 +212,12 @@ def compute_risk(row: pd.Series, business_type: str, wants_alcohol: bool, wants_
     else:
         reasons.append("Recent permit activity (in the demo data) may indicate some upgrades were done previously (still confirm).")
 
-    # Convert score to label
     if score <= 1:
-        risk_label = "Low"
-        risk_emoji = "🟢"
+        risk_label, risk_emoji = "Low", "🟢"
     elif score <= 4:
-        risk_label = "Moderate"
-        risk_emoji = "🟡"
+        risk_label, risk_emoji = "Moderate", "🟡"
     else:
-        risk_label = "High"
-        risk_emoji = "🔴"
+        risk_label, risk_emoji = "High", "🔴"
 
     return {
         "score": score,
@@ -227,7 +228,6 @@ def compute_risk(row: pd.Series, business_type: str, wants_alcohol: bool, wants_
         "approvals": approvals,
         "cert_ok": cert_ok
     }
-
 
 def build_report(address_input, business_type, match_score, row, assessment):
     lines = []
@@ -265,9 +265,8 @@ def build_report(address_input, business_type, match_score, row, assessment):
     lines.append("Disclaimer: This is a prototype decision-support tool, not legal advice. Always confirm details with SDCI/OED resources.")
     return "\n".join(lines)
 
-
 # -----------------------------
-# Demo data (embedded to avoid CSV permission issues)
+# Demo data (embedded for reliability)
 # -----------------------------
 @st.cache_data
 def load_demo_data() -> pd.DataFrame:
@@ -285,7 +284,6 @@ P-006,600 1st Ave S,Pioneer Square,Warehouse,Industrial,TRUE,"Historic area; ver
 
 df = load_demo_data()
 
-
 # -----------------------------
 # UI
 # -----------------------------
@@ -300,7 +298,8 @@ with st.expander("What this prototype does (for judges)"):
         "**Note:** Demo dataset is intentionally small. The value is the workflow + explainable logic."
     )
 
-# Inputs
+st.caption(f"Matching engine: {'RapidFuzz' if HAS_RAPIDFUZZ else 'difflib fallback (no RapidFuzz)'}")
+
 st.markdown("### Step 1 — Your business + location")
 business_type = st.selectbox("Business type", BUSINESS_TYPES)
 address_input = st.text_input("Property address", placeholder="Example: 504 S King St")
@@ -338,7 +337,6 @@ if analyze:
 
     assessment = compute_risk(best_row, business_type, wants_alcohol, wants_kitchen_hood)
 
-    # Risk card
     st.markdown("### Results")
     st.markdown(
         f"""
@@ -357,7 +355,6 @@ if analyze:
         unsafe_allow_html=True
     )
 
-    # Flags
     st.markdown('<div class="section"></div>', unsafe_allow_html=True)
     st.subheader("Key renovation / review flags")
     if assessment["flags"]:
@@ -366,13 +363,11 @@ if analyze:
     else:
         st.success("No major flags detected in this demo dataset. Still verify with City resources.")
 
-    # Plain-language explanation
     st.markdown('<div class="section"></div>', unsafe_allow_html=True)
     st.subheader("Plain-language explanation")
     for r in assessment["reasons"]:
         st.write(f"- {r}")
 
-    # Checklist
     st.markdown('<div class="section"></div>', unsafe_allow_html=True)
     st.subheader("Before you sign — checklist")
     if assessment["approvals"]:
@@ -381,13 +376,11 @@ if analyze:
     else:
         st.checkbox("Verify permitted use, occupancy, and required permits", value=False)
 
-    # Resource links
     st.markdown('<div class="section"></div>', unsafe_allow_html=True)
     st.subheader("Free City resources")
     for name, url in RESOURCE_LINKS.items():
         st.write(f"- [{name}]({url})")
 
-    # Download report
     report_text = build_report(address_input, business_type, best_score, best_row, assessment)
     st.download_button(
         label="Download 'Before You Sign' Report (TXT)",
@@ -398,24 +391,5 @@ if analyze:
 
     st.caption("Disclaimer: Prototype decision-support tool. Not legal advice. Confirm details with SDCI/OED resources.")
 
-# Footer
 st.markdown("---")
 st.caption("Demo dataset is embedded for reliability in demos. You can swap in real city datasets later.")
-
-# To run: python -m streamlit run .\streamlit_app.py
-#Test1 with high risk: Restaurant / Café, 900 Jackson St,(Click on options)
-#Test2 with low risk: Retail / Retail, 1520 2nd Ave
-# How
-# elevate the fuzzmatching
-
-
-#  Add alcohol license
-#  Improve the webpage to match the city of seattle webpage style:
-# ChatGPT Prompt:
-#
-# Update the layout, design, colors, fonts and any additional design elements to match the url below for City of Seattle.
-#
-# URL: <add the URL here>
-#
-
-# Feel free to add more detail and specifications. The more context you provide the prompt the better the return and more precise changes to the code
